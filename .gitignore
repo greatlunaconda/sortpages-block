@@ -1,0 +1,29 @@
+# Dependency directories
+node_modules/
+
+# Build and distribution directories (optional, see note below)
+build/
+dist/
+
+# Environment files
+.env
+
+# WordPress development environment files
+.wp-env.json
+.wordpress-org/
+
+# macOS files
+.DS_Store
+
+# IDE/Editor specific files
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Node Modules
+node_modules/ 
+
+# Log files
+npm-debug.log
+yarn-error.log

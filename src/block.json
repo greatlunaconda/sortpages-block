@@ -1,0 +1,33 @@
+{
+    "$schema": "https://schemas.wp.org/trunk/block.json",
+    "apiVersion": 3,
+    "name": "sortpages/sort-pages-block",
+    "version": "1.0.0",
+    "title": "Sort Pages Block",
+    "category": "widgets",
+    "description": "Display sorted pages with custom field values",
+    "attributes": {
+        "sortField": {
+            "type": "string",
+            "default": "menu_order"
+        },
+        "sortOrder": {
+            "type": "string",
+            "default": "ASC"
+        },
+        "postType": {
+            "type": "string",
+            "default": "page"
+        },
+        "numberOfPosts": {
+            "type": "number",
+            "default": 10
+        }
+    },
+    "supports": {
+        "html": false
+    },
+    "textdomain": "sortpages-block",
+    "editorScript": "file:./index.js",
+    "render": "file:./render.php"
+}

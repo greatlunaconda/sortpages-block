@@ -1,0 +1,17 @@
+//function.php
+
+function create_my_post_types() {
+    register_post_type( 'zakokyara', // スラッグ（半角英数字）
+        array(
+            'labels' => array(
+                'name' => '雑魚キャラ', // 管理画面に表示される名前（複数形）
+                'singular_name' => 'zakokyarakiller', // 管理画面に表示される名前（単数形）
+            ),
+            'public' => true,
+            'has_archive' => true, // アーカイブページを有効にするか
+            'supports' => array( 'title', 'editor', 'thumbnail', 'custom-fields' ), // サポートする機能（タイトル、本文、アイキャッチ>画像など）
+            'menu_icon' => 'dashicons-admin-post', // 管理画面メニューアイコン
+        )
+    );
+}
+add_action( 'init', 'create_my_post_types' );
