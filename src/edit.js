@@ -1,9 +1,19 @@
 import { __ } from '@wordpress/i18n';
 import { InspectorControls, useBlockProps } from '@wordpress/block-editor';
 import { PanelBody, SelectControl, TextControl } from '@wordpress/components';
+import { useSelect } from '@wordpress/data';
 
 export default function Edit({ attributes, setAttributes }) {
     const { sortField, sortOrder, postType, numberOfPosts } = attributes;
+
+    const postTypes = useSelect((select) => {
+        const { getPostTypes } = select('core');
+        const types = getPostTypes({ per_page: -1 });
+        return types ? types.filter(type => type.viewable).map(type => ({
+            label: type.name,
+            value: type.slug
+        })) : [];
+    }, []);
 
     return (
         <>
@@ -12,10 +22,7 @@ export default function Edit({ attributes, setAttributes }) {
                     <SelectControl
                         label={__('Post Type', 'sortpages-block')}
                         value={postType}
-                        options={[
-                            { label: 'Pages', value: 'page' },
-                            { label: 'Posts', value: 'post' }
-                        ]}
+                        options={postTypes}
                         onChange={(value) => setAttributes({ postType: value })}
                     />
                     <TextControl
