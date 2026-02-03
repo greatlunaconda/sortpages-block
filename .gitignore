@@ -21,9 +21,6 @@ dist/
 *.sublime-project
 *.sublime-workspace
 
-# Node Modules
-node_modules/ 
-
 # Log files
 npm-debug.log
 yarn-error.log

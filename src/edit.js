@@ -8,12 +8,34 @@ export default function Edit({ attributes, setAttributes }) {
 
     const postTypes = useSelect((select) => {
         const { getPostTypes } = select('core');
-        const types = getPostTypes({ per_page: -1 });
-        return types ? types.filter(type => type.viewable).map(type => ({
+        const types = getPostTypes({ per_page: -1, context: 'edit' });
+        console.log('Available post types:', types); // デバッグ用
+        return types ? types.filter(type => type.viewable && type.slug !== 'attachment').map(type => ({
             label: type.name,
             value: type.slug
         })) : [];
     }, []);
+
+    const customFields = useSelect((select) => {
+        if (!postType) return [];
+        const { getEntityRecords } = select('core');
+        const posts = getEntityRecords('postType', postType, { per_page: 100, context: 'edit' });
+        console.log('Posts for', postType, ':', posts); // デバッグ用
+        if (!posts) return [];
+        
+        const fieldKeys = new Set();
+        posts.forEach(post => {
+            console.log('Post meta:', post.meta); // デバッグ用
+            if (post.meta) {
+                Object.keys(post.meta).forEach(key => {
+                    if (!key.startsWith('_')) fieldKeys.add(key);
+                });
+            }
+        });
+        
+        console.log('Found custom fields:', Array.from(fieldKeys)); // デバッグ用
+        return Array.from(fieldKeys).map(key => ({ label: key, value: key }));
+    }, [postType]);
 
     return (
         <>
@@ -25,11 +47,15 @@ export default function Edit({ attributes, setAttributes }) {
                         options={postTypes}
                         onChange={(value) => setAttributes({ postType: value })}
                     />
-                    <TextControl
+                    <SelectControl
                         label={__('Sort Field (Custom Field Key)', 'sortpages-block')}
                         value={sortField}
+                        options={[
+                            { label: 'Select a field...', value: '' },
+                            { label: 'Menu Order', value: 'menu_order' },
+                            ...customFields
+                        ]}
                         onChange={(value) => setAttributes({ sortField: value })}
-                        help={__('Enter custom field key or "menu_order" for page order', 'sortpages-block')}
                     />
                     <SelectControl
                         label={__('Sort Order', 'sortpages-block')}

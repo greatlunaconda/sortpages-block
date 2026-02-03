@@ -408,6 +408,13 @@ WordPress Developer Resources
 
 NPM
 
+###########
+"node_modules/@wordpress/scripts":
+
+"node_modules/core-js":
+
+###########
+
 すべて表示
 ワードプレスのデータベースだとどの表に対応しますか
 Gutenbergの wp.data.select('core') で取得できるエンティティ（データ）と、WordPressの実際のデータベース（MySQL/MariaDB）テーブルの対応関係は以下の通りです。 
@@ -472,5 +479,138 @@ PHP（サーバーサイド）: $wpdb クラスを使用して直接SQLクエリ
 
 ################################################
 
+sortpages-block/src/edit.js　行９から１６にて,カスタム投稿タイプを取得したいが現在page, post, mediaしか取得できていない。
 
 
+Context
+現在のコードでは getPostTypes の引数が不十分で、カスタム投稿タイプが取得できていません。9行目から16行目を以下のように修正します：
+
+カスタム投稿タイプを含む全ての投稿タイプを取得するため、getPostTypesの引数を修正します
+
+edit.js
++2
+-2
+
+Undo
+修正内容：
+
+getPostTypes に context: 'edit' パラメータを追加してカスタム投稿タイプも含めて取得
+
+attachment タイプを除外するフィルターを追加（メディアファイルは通常不要なため）
+
+これでカスタム投稿タイプも選択肢に表示されるようになります。
+
+まだ表示されない。カスタム投稿タイプに必要な設定はあるのか？
+
+
+Context
+カスタム投稿タイプがGutenbergエディタで表示されるには、投稿タイプ登録時に show_in_rest と public の設定が必要です。
+
+まず現在取得できている投稿タイプを確認するため、デバッグ用のコードを追加しましょう：
+
+デバッグ用のconsole.logを追加して取得できている投稿タイプを確認します
+
+edit.js
++1
+-0
+
+Undo
+カスタム投稿タイプが表示されない場合、投稿タイプの登録時に以下の設定が必要です：
+
+register_post_type('your_custom_post_type', array(
+    'public' => true,
+    'show_in_rest' => true,  // REST API対応（Gutenberg必須）
+    'show_in_admin_bar' => true,
+    'show_ui' => true,
+    // その他の設定...
+));
+
+Copy
+ブラウザの開発者ツールのコンソールで取得できている投稿タイプを確認し、カスタム投稿タイプが含まれていない場合は、投稿タイプの登録設定を確認してください。
+
+
+##############################################
+
+次はsorttpages-block/src/edit.js内にて行２３＝２８ によって選択された投稿タイプごとにカスタムフィールドのキーを全て抽出して、行２９〜３４で選択するカスタムフィールドキーの候補として表示してください。
+
+
+Context
+選択された投稿タイプのカスタムフィールドキーを取得して、SelectControlで選択できるようにします：
+
+選択された投稿タイプのカスタムフィールドキーを取得するuseSelectフックを追加します
+
+edit.js
++18
+-0
+
+Undo
+TextControlをSelectControlに変更して、取得したカスタムフィールドキーを選択肢として表示します
+
+edit.js
++6
+-2
+
+Undo
+
+Undo all changes
+これで投稿タイプを選択すると、そのタイプの投稿に含まれるカスタムフィールドキーが自動的に取得され、SelectControlで選択できるようになります。menu_orderも含めて選択肢に表示されます。
+
+
+##############################################
+
+選択された投稿タイプのカスタムフィールドキーを取得して、SelectControlで選択できるようにします：
+
+選択された投稿タイプのカスタムフィールドキーを取得するuseSelectフックを追加します
+
+edit.js
++18
+-0
+
+Undo
+TextControlをSelectControlに変更して、取得したカスタムフィールドキーを選択肢として表示します
+
+edit.js
++6
+-2
+
+Undo
+
+Undo all changes
+これで投稿タイプを選択すると、そのタイプの投稿に含まれるカスタムフィールドキーが自動的に取得され、SelectControlで選択できるようになります。menu_orderも含めて選択肢に表示されます。
+
+行４７〜５６内の選択オプションにカスタムフィールドは表示されません。ワードプレス関係の設定で表示されない可能性はありますか？
+
+
+Context
+はい、WordPressでカスタムフィールドがREST APIで取得できない主な原因があります。デバッグ用のコードを追加して確認しましょう：
+
+デバッグ用のconsole.logを追加してカスタムフィールドの取得状況を確認します
+
+edit.js
++3
+-0
+
+Undo
+カスタムフィールドがREST APIで表示されない主な原因：
+
+カスタムフィールドのREST API登録が必要
+
+// functions.phpまたはプラグインで
+register_meta('post', 'your_custom_field_key', array(
+    'show_in_rest' => true,
+    'type' => 'string',
+    'single' => true,
+));
+
+Copy
+php
+投稿タイプでmeta_fieldsの権限設定
+
+register_post_type('your_post_type', array(
+    'supports' => array('title', 'editor', 'custom-fields'),
+    'show_in_rest' => true,
+));
+
+Copy
+php
+ブラウザの開発者ツールでコンソールを確認し、post.metaが空かどうか確認してください。空の場合は上記の設定が必要です。
