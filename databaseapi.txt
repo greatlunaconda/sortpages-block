@@ -1,0 +1,989 @@
+
+useSelect('core') を使用して`wp_actionscheduler_actions`テーブルの値を取得する方法
+
+結論から言うと、useSelect('core') だけでは wp_actionscheduler_actions のデータを直接取得することはできません。
+なぜなら、core データストアが対象とするのは、WordPress の「標準的な REST API エンドポイント（投稿、固定ページ、カテゴリーなど）」のみだからです。Action Scheduler はカスタムテーブルであるため、core の管理外にあります。
+どうしても useSelect で取得したい場合は、以下の「カスタムデータソースの登録」が必要です。
+実装手順
+1. REST API の rest_base を「投稿タイプ」のように偽装する
+まず PHP 側で、core データストアが認識できる形式でカスタムエンドポイントを登録します。
+php
+// functions.php 等
+add_action( 'rest_api_init', function () {
+    // core データストアからアクセスできるようにエンドポイントを構成
+    register_rest_route( 'wp/v2', '/as-actions', array(
+        'methods'  => 'GET',
+        'callback' => function() {
+            global $wpdb;
+            return $wpdb->get_results( "SELECT * FROM {$wpdb->prefix}actionscheduler_actions LIMIT 10" );
+        },
+        'permission_callback' => '__return_true', // 実際は権限チェックを推奨
+    ) );
+} );
+コードは注意してご使用ください。
+
+2. JavaScript 側で「エンティティ」として定義する
+core データストアに「こういうデータ（エンティティ）があるよ」と教えてあげる必要があります。
+javascript
+import { useSelect } from '@wordpress/data';
+import { addEntities } from '@wordpress/core-data';
+import { dispatch } from '@wordpress/data';
+
+// 1. core データストアに新しいエンティティを追加
+dispatch('core').addEntities([
+    {
+        name: 'as-actions', // エンティティ名
+        kind: 'root',      // ルート階層
+        baseURL: '/wp/v2/as-actions', // 作成したAPIのパス
+    }
+]);
+
+// 2. useSelect で呼び出す
+const MyComponent = () => {
+    const actions = useSelect( ( select ) => {
+        return select('core').getEntityRecords('root', 'as-actions');
+    }, [] );
+
+    if ( ! actions ) return 'Loading...';
+
+    return (
+        <ul>
+            { actions.map( ( action ) => (
+                <li key={ action.action_id }>{ action.hook }</li>
+            ) ) }
+        </ul>
+    );
+};
+コードは注意してご使用ください。
+
+なぜこの手順が必要か？
+useSelect('core') は、内部的に WordPress REST API Reference にある標準パスを前提に動作します。
+Action Scheduler は独自テーブルなので、addEntities を使って 「core データの仲間」として手動登録 しない限り、getEntityRecords などの便利な関数が反応してくれません。
+この方法は少し高度ですが、複数のコンポーネントで Action Scheduler のデータを同期・共有したい場合に非常に有効です。
+今回取得したいデータは、単なる表示用ですか？それとも、JavaScript 側からアクションを再実行・削除するなどの操作も含みますか？
+
+
+#######################################
+
+rest api によって`wp_actionscheduler_actions`テーブルの値を取得する方法
+WordPress の Action Scheduler (wp_actionscheduler_actions) には、デフォルトで専用の REST API エンドポイントは用意されていません。 
+そのため、このテーブルの値を取得するには、以下のいずれかの方法でカスタムエンドポイントを自作する必要があります。
+1. カスタム REST API エンドポイントを作成する
+register_rest_route 関数を使用して、独自の API パスを作成します。PHP 内で Action Scheduler の関数（as_get_scheduled_actions など）を呼び出すことで、テーブルデータを JSON 形式で返せます。 
+実装例（functions.php などに記述）:
+php
+add_action( 'rest_api_init', function () {
+    register_rest_route( 'my-plugin/v1', '/actions', array(
+        'methods'  => 'GET',
+        'callback' => 'get_as_actions_data',
+        'permission_callback' => function () {
+            return current_user_can( 'manage_options' ); // 管理者権限が必要
+        }
+    ) );
+} );
+
+function get_as_actions_data() {
+    // Action Scheduler の API を使用してデータを取得
+    // または $wpdb を使って直接 wp_actionscheduler_actions テーブルをクエリ
+    $actions = ActionScheduler_wpPostStore::query_actions( array( 'per_page' => 10 ) );
+    return rest_ensure_response( $actions );
+}
+コードは注意してご使用ください。
+
+2. $wpdb を使った直接クエリ
+特定のステータス（完了、待機中など）を柔軟に取得したい場合は、$wpdb を用いて直接 SQL を実行するのが効率的です。 
+テーブル名: {$wpdb->prefix}actionscheduler_actions
+関連テーブル: {$wpdb->prefix}actionscheduler_logs（履歴が必要な場合）
+注意点
+セキュリティ: Action Scheduler のデータには機密情報が含まれる可能性があるため、必ず permission_callback で適切な権限チェックを行ってください。
+データの肥大化: 稼働時間の長いサイトではこのテーブルが数 GB 規模になることがあるため、取得時の LIMIT 設定は必須です。 
+具体的に、どのステータス（pending/completeなど）の情報を取得したいとお考えですか？
+
+##########################################
+
+useSelect('core') を使用して`wp_terms`テーブルの値を取得する方法
+wp_terms テーブル（カテゴリーやタグ）は WordPress の標準エンティティであるため、useSelect('core') を使って追加設定なしで直接取得できます。
+基本的な書き方
+カテゴリー（category）やタグ（post_tag）などのタクソノミーを指定して取得します。
+javascript
+import { useSelect } from '@wordpress/data';
+
+const MyTermList = () => {
+    const { terms, hasResolved } = useSelect( ( select ) => {
+        const query = { per_page: -1, hide_empty: false }; // 全件取得、空のタームも含む
+        return {
+            terms: select( 'core' ).getEntityRecords( 'taxonomy', 'category', query ),
+            hasResolved: select( 'core' ).hasFinishedResolution( 'getEntityRecords', [ 'taxonomy', 'category', query ] ),
+        };
+    }, [] );
+
+    if ( ! hasResolved ) return <p>読み込み中...</p>;
+    if ( ! terms ) return <p>データがありません</p>;
+
+    return (
+        <ul>
+            { terms.map( ( term ) => (
+                <li key={ term.id }>{ term.name } (ID: { term.id })</li>
+            ) ) }
+        </ul>
+    );
+};
+コードは注意してご使用ください。
+
+取得条件の指定
+getEntityRecords の第 3 引数にクエリを渡すことで、取得結果を絞り込めます。
+タグを取得する場合: 'category' を 'post_tag' に変更します。
+特定の投稿に紐づくタームを取得: select('core').getEntityRecords('taxonomy', 'category', { post: 123 })
+親子関係のフィルタリング: parent: 0 を指定すると親カテゴリーのみ取得できます。
+注意点
+カスタムタクソノミーの場合: PHP 側で register_taxonomy する際に 'show_in_rest' => true が設定されている必要があります。設定されていないと useSelect から参照できません。
+データの同期: useSelect は内部で Redux ストア を監視しているため、別のコンポーネントでタームが更新されると自動的に再レンダリングされます。
+特定のカスタムタクソノミーを取得しようとして、データがうまく返ってこないなどの問題は発生していますか？
+
+
+#############################################
+
+rest api によって`wp_terms`テーブルの値を取得する方法
+wp_terms テーブルのデータ（カテゴリーやタグなど）を取得するには、WordPress 標準の Taxonomy エンドポイントを使用するのが最も簡単で確実です。 
+1. 標準エンドポイントを使用する
+WordPress には、wp_terms に紐づく主要なデータの取得用 URL がデフォルトで用意されています。
+カテゴリー一覧: https://example.com/wp-json/wp/v2/categories
+タグ一覧: https://example.com/wp-json/wp/v2/tags 
+2. カスタムタクソノミーの場合
+自分で作成したカスタムタクソノミーのデータを取得したい場合は、そのタクソノミーを登録する際の register_taxonomy 関数で、必ず 'show_in_rest' => true を設定する必要があります。 
+エンドポイント例: https://example.com/wp-json/wp/v2/{taxonomy_slug}
+※ rest_base を指定している場合は、その値が URL になります。 
+3. パラメーターによる絞り込み
+URL の末尾にクエリパラメーターを追加することで、取得結果を調整できます。 
+特定の親を持つタームのみ: ?parent={id}
+件数指定: ?per_page=100 (デフォルトは 10)
+特定の名前で検索: ?search=キーワード 
+4. 特定の ID の値を取得する
+特定のターム 1 件の詳細を取得する場合は、URL の末尾に ID を付与します。
+https://example.com/wp-json/wp/v2/categories/{id} 
+もし、標準の API では取得できない特殊なカラム（独自に追加したカラムなど）を含めたい場合は、前述の Action Scheduler の例と同様に カスタムエンドポイントを自作 して $wpdb で直接クエリを発行する必要があります。 
+現在、特定のタクソノミー（例：カスタム投稿用のカテゴリなど）の取得でお困りですか？
+
+
+###################################################
+
+useSelect('core') を使用して`wp_termmeta`テーブルの値を取得する方法
+wp_termmeta テーブルの値を useSelect('core') で取得するには、そのメタデータが REST API に公開されていることが必須条件です。デフォルトではセキュリティ上の理由から、メタデータは API に含まれません。
+以下の2ステップで実装します。
+1. PHP側：メタデータを REST API に登録する
+まず、register_term_meta を使用して、特定のメタキーを REST API で読み書きできるように許可します。
+php
+add_action( 'init', function() {
+    register_term_meta( 'category', 'my_custom_meta_key', array(
+        'show_in_rest' => true, // これを true にするのがポイント
+        'single'       => true,
+        'type'         => 'string',
+    ) );
+} );
+コードは注意してご使用ください。
+
+2. JS側：useSelect で取得する
+メタデータは、取得したタームオブジェクト内の meta プロパティに格納されます。
+javascript
+import { useSelect } from '@wordpress/data';
+
+const CategoryMeta = ( { categoryId } ) => {
+    const category = useSelect( ( select ) => {
+        // getEntityRecord (単数形) を使用して特定のカテゴリーを取得
+        return select( 'core' ).getEntityRecord( 'taxonomy', 'category', categoryId );
+    }, [ categoryId ] );
+
+    // メタデータの取得
+    const metaValue = category?.meta?.['my_custom_meta_key'];
+
+    if ( ! category ) return 'Loading...';
+
+    return (
+        <div>
+            <p>カテゴリー名: { category.name }</p>
+            <p>カスタムメタ値: { metaValue || '未設定' }</p>
+        </div>
+    );
+};
+コードは注意してご使用ください。
+
+重要なポイント
+個別登録が必要: wp_termmeta テーブルにある全ての値が自動で取れるわけではありません。取得したいキー（meta_key）ごとに register_term_meta で show_in_rest => true を設定する必要があります。
+一括取得の場合: getEntityRecords (複数形) で取得した場合も、各タームオブジェクトの中に meta フィールドが含まれます。
+ACF を使っている場合: Advanced Custom Fields を使用しているなら、設定画面から「Show in REST API」を ON にするだけで、acf プロパティ経由で取得可能になります。
+特定のプラグインが作成したメタデータや、ACFなどで作成したフィールドを取得しようとしていますか？
+
+#######################################################
+
+useSelect('core') を使用して'wp_commentmeta'テーブルの値を取得する方法
+wp_commentmeta テーブルの値を useSelect('core') で取得する場合、投稿（post）と同様に PHP 側で REST API への露出設定を行い、その後 JS 側で comment エンティティを介してアクセスします。
+1. PHP 側：コメントメタの登録
+コメントのメタデータはデフォルトでは REST API に含まれません。register_meta を使用して、show_in_rest を true に設定する必要があります。 
+php
+// functions.php などに記述
+add_action( 'init', function() {
+    register_meta( 'comment', 'your_meta_key', array(
+        'type'         => 'string',
+        'single'       => true,
+        'show_in_rest' => true, // これが必須
+    ) );
+} );
+コードは注意してご使用ください。
+
+2. JS 側：useSelect による取得
+メタデータが登録されると、select('core').getEntityRecords で取得したコメントオブジェクトの meta プロパティ内に値が含まれるようになります。 
+javascript
+import { useSelect } from '@wordpress/data';
+
+const CommentMetaViewer = ( { commentId } ) => {
+    const comment = useSelect( ( select ) => {
+        // 'root' kind の 'comment' エンティティから特定のIDを取得
+        return select( 'core' ).getEntityRecord( 'root', 'comment', commentId );
+    }, [ commentId ] );
+
+    // メタデータの取得
+    const metaValue = comment?.meta?.['your_meta_key'];
+
+    return (
+        <div>
+            コメントメタの値: { metaValue || 'データなし' }
+        </div>
+    );
+};
+コードは注意してご使用ください。
+
+注意点
+テーブル直接アクセスではない: useSelect は SQL を発行するのではなく、REST API エンドポイント (/wp/v2/comments) を叩きます。そのため、API が返さないデータにはアクセスできません。
+getEntityRecords の利用: 複数のコメントのメタを一覧したい場合は getEntityRecords( 'root', 'comment' ) を使用します。 
+特定のコメントIDに基づいて取得したいですか？それとも投稿に紐づくコメント一覧からメタを取得したいですか？
+
+#######################################################
+
+useSelect('core') を使用して`wp_comments`テーブルの値を取得する方法
+wp_comments テーブルの情報は、WordPress 標準の comment エンティティとして core データストアに登録されています。そのため、特別な設定なしで useSelect から直接取得可能です。
+基本的な取得方法
+getEntityRecords を使用します。第1引数に 'root'、第2引数に 'comment' を指定するのがポイントです。
+javascript
+import { useSelect } from '@wordpress/data';
+
+const MyComments = () => {
+    const { comments, hasResolved } = useSelect( ( select ) => {
+        // クエリ条件（例：最新10件、承認済みのみ）
+        const query = { per_page: 10, status: 'approve' };
+        
+        return {
+            comments: select( 'core' ).getEntityRecords( 'root', 'comment', query ),
+            hasResolved: select( 'core' ).hasFinishedResolution( 'getEntityRecords', [ 'root', 'comment', query ] ),
+        };
+    }, [] );
+
+    if ( ! hasResolved ) return <p>読み込み中...</p>;
+
+    return (
+        <ul>
+            { comments?.map( comment => (
+                <li key={ comment.id }>
+                    { comment.author_name }: { comment.content.raw }
+                </li>
+            ) ) }
+        </ul>
+    );
+};
+コードは注意してご使用ください。
+
+フィルタリングのバリエーション
+クエリパラメーターを書き換えることで、特定の条件に絞った wp_comments の値を取得できます。
+特定の投稿に紐づくコメント: { post: 投稿ID }
+特定のユーザーのコメント: { author: ユーザーID }
+親子関係（返信）の取得: { parent: 親コメントID }
+未承認コメントの確認: { status: 'hold' }（※閲覧権限が必要です）
+補足：commentmeta を取得する場合
+wp_commentmeta の値も一緒に取得したい場合は、事前に PHP 側で register_meta を使い、show_in_rest を true に設定しておく必要があります。
+次は、取得したコメントを JavaScript 側から更新・削除（dispatch）する方法 について詳しく解説しましょうか？
+
+###################################################
+
+useSelect('core') を使用して`wp_gla_attribute_mapping_rules`テーブルの値を取得する方法
+wp_gla_attribute_mapping_rules は、Google Listing & Ads プラグイン固有のカスタムテーブルです。
+WordPress の core データストアは、標準テーブル（投稿、コメント、タームなど）しか認識しません。そのため、useSelect('core') でこのテーブルを取得するには、「カスタム REST API の作成」 と 「core データストアへのエンティティ登録」 の両方が必要になります。
+手順 1: PHP でカスタム API を作成
+このテーブルの内容を JSON で返すエンドポイントを自作します。
+php
+// functions.php またはプラグインファイル
+add_action( 'rest_api_init', function () {
+    register_rest_route( 'gla/v1', '/mapping-rules', array(
+        'methods'  => 'GET',
+        'callback' => function() {
+            global $wpdb;
+            $table_name = $wpdb->prefix . 'gla_attribute_mapping_rules';
+            // テーブルから全件取得
+            return $wpdb->get_results( "SELECT * FROM {$table_name}" );
+        },
+        'permission_callback' => function () {
+            return current_user_can( 'manage_options' );
+        }
+    ) );
+} );
+コードは注意してご使用ください。
+
+手順 2: JS で core データストアに登録
+useSelect('core') で呼び出せるように、クライアント側でエンティティとして追加します。
+javascript
+import { useSelect, dispatch } from '@wordpress/data';
+import { useEffect } from '@wordpress/element';
+
+// エンティティの登録（一度だけ実行）
+dispatch('core').addEntities([
+    {
+        name: 'mapping-rules',
+        kind: 'gla-plugin', // 任意のグループ名
+        baseURL: '/gla/v1/mapping-rules',
+    }
+]);
+
+const MappingRulesList = () => {
+    const rules = useSelect( ( select ) => {
+        // 第1引数に kind、第2引数に name を指定
+        return select( 'core' ).getEntityRecords( 'gla-plugin', 'mapping-rules' );
+    }, [] );
+
+    if ( ! rules ) return <p>Loading Rules...</p>;
+
+    return (
+        <ul>
+            { rules.map( rule => (
+                <li key={ rule.id }>{ rule.attribute } → { rule.source }</li>
+            ) ) }
+        </ul>
+    );
+};
+コードは注意してご使用ください。
+
+なぜこの手順が必要か？
+非標準テーブル: WordPress の Core Data セレクター は、wp_posts や wp_comments のように API パスが標準化されているものしか自動で扱いません。
+エンティティ定義: addEntities を使うことで、getEntityRecords などの標準的な コアデータ関数 を使ってカスタムデータを管理（キャッシュ、取得、更新）できるようになります。
+このマッピングルールを取得して、独自の管理画面で設定を編集できるようにしたい、といった目的でしょうか？
+
+##################################################
+
+useSelect('core') を使用して`wp_gla_budget_recommendations`テーブルの値を取得する方法
+wp_gla_budget_recommendations も Google Listing & Ads プラグインの専用カスタムテーブルであるため、先ほどと同様に 「REST API の自作」 と 「core データストアへのエンティティ登録」 が必要です。
+WordPress の標準機能には含まれていないため、以下の手順で「core データの仲間」として定義します。
+手順 1: PHP で API エンドポイントを作成
+wp_gla_budget_recommendations テーブルのデータを返すエンドポイントを登録します。
+php
+add_action( 'rest_api_init', function () {
+    register_rest_route( 'gla/v1', '/budget-recommendations', array(
+        'methods'  => 'GET',
+        'callback' => function() {
+            global $wpdb;
+            $table_name = $wpdb->prefix . 'gla_budget_recommendations';
+            return $wpdb->get_results( "SELECT * FROM {$table_name}" );
+        },
+        'permission_callback' => function () {
+            return current_user_can( 'manage_options' );
+        }
+    ) );
+} );
+コードは注意してご使用ください。
+
+手順 2: JS でエンティティを登録して useSelect で取得
+dispatch('core').addEntities を使って、core データストアからアクセス可能にします。
+javascript
+import { useSelect, dispatch } from '@wordpress/data';
+
+// 1. coreデータストアにカスタムエンティティを紐付け
+dispatch('core').addEntities([
+    {
+        name: 'budget-recommendations',
+        kind: 'gla-plugin',
+        baseURL: '/gla/v1/budget-recommendations',
+    }
+]);
+
+// 2. コンポーネント内で使用
+const BudgetRecommendations = () => {
+    const { recommendations, hasResolved } = useSelect( ( select ) => {
+        const selectorArgs = [ 'gla-plugin', 'budget-recommendations' ];
+        return {
+            recommendations: select( 'core' ).getEntityRecords( ...selectorArgs ),
+            hasResolved: select( 'core' ).hasFinishedResolution( 'getEntityRecords', selectorArgs ),
+        };
+    }, [] );
+
+    if ( ! hasResolved ) return <p>Loading recommendations...</p>;
+
+    return (
+        <ul>
+            { recommendations?.map( rec => (
+                <li key={ rec.id }>推奨予算: { rec.daily_budget }</li>
+            ) ) }
+        </ul>
+    );
+};
+コードは注意してご使用ください。
+
+ポイント
+名前の一致: addEntities で定義した name と kind を、getEntityRecords の引数と正確に一致させる必要があります。
+キャッシュの利点: 一度 addEntities で登録してしまえば、useSelect('core') は自動的に ブラウザ内キャッシュ を管理してくれるため、パフォーマンスが向上します。
+この予算推奨データを使用して、広告予算の自動最適化やダッシュボードへの表示を検討されていますか？
+
+##############################################
+
+useSelect('core') を使用して`wp_links`テーブルの値を取得する方法
+wp_links テーブル（リンクマネージャー機能）は、現在の WordPress では非推奨（デフォルトで無効化）となっており、REST API に標準のエンドポイントが存在しません。
+そのため、useSelect('core') で取得するには、これまでのカスタムテーブルと同様に PHP での API 登録 と JS でのエンティティ追加 が必要です。
+手順 1: PHP でリンクデータを返す API を作成
+php
+add_action( 'rest_api_init', function () {
+    register_rest_route( 'my-plugin/v1', '/links', array(
+        'methods'  => 'GET',
+        'callback' => function() {
+            // get_bookmarks 関数を使用して wp_links のデータを取得
+            return get_bookmarks( array( 'hide_invisible' => 'N' ) );
+        },
+        'permission_callback' => function () {
+            return current_user_can( 'manage_options' );
+        }
+    ) );
+} );
+コードは注意してご使用ください。
+
+手順 2: JS で core データストアに登録して取得
+dispatch('core').addEntities を使い、core データストアの一部として扱えるようにします。
+javascript
+import { useSelect, dispatch } from '@wordpress/data';
+
+// 1. core データストアにエンティティを登録
+dispatch( 'core' ).addEntities( [
+    {
+        name: 'links',
+        kind: 'root',
+        baseURL: '/my-plugin/v1/links',
+    }
+] );
+
+// 2. useSelect で取得
+const LinkList = () => {
+    const links = useSelect( ( select ) => {
+        return select( 'core' ).getEntityRecords( 'root', 'links' );
+    }, [] );
+
+    if ( ! links ) return <p>読み込み中...</p>;
+
+    return (
+        <ul>
+            { links.map( link => (
+                <li key={ link.link_id }>
+                    <a href={ link.link_url }>{ link.link_name }</a>
+                </li>
+            ) ) }
+        </ul>
+    );
+};
+コードは注意してご使用ください。
+
+重要な補足
+非推奨機能: wp_links は WordPress 3.5 以降、Link Manager プラグイン を入れない限り管理画面からも消えている古い機能です。新規開発であれば、カスタム投稿タイプ でリンク集を作る方が、useSelect('core') から標準で取得できるため管理が楽になります。
+データの構造: get_bookmarks で返されるカラム名（link_url, link_name など）が JS 側でそのままプロパティ名になります。
+このデータを使って、サイドバーのリンク集（ブックマーク）のような機能を自作されていますか？
+
+#################################################
+
+useSelect('core') を使用して`wp_options`テーブルの値を取得する方法
+wp_options テーブルのデータは、WordPress の Settings API を介して core データストアに統合されています。
+ただし、セキュリティ上の理由から、デフォルトでは特定のホワイトリストに含まれる設定項目のみが公開されています。
+1. PHP側：取得したいオプションを REST API に公開する
+標準以外のオプション（カスタムプラグインの設定など）を取得したい場合は、まず register_setting を使用して show_in_rest を true に設定する必要があります。
+php
+add_action( 'init', function() {
+    register_setting( 'general', 'my_custom_option_name', array(
+        'show_in_rest' => true,
+        'type'         => 'string',
+    ) );
+} );
+コードは注意してご使用ください。
+
+2. JS側：useSelect で取得する
+設定値を取得するには、getEntityRecord の第2引数に 'site'、第3引数に空文字列 '' を指定します。
+javascript
+import { useSelect } from '@wordpress/data';
+
+const SiteSettings = () => {
+    const settings = useSelect( ( select ) => {
+        // 'site' エンティティから全ての設定を取得
+        return select( 'core' ).getSite();
+        // または個別：select( 'core' ).getEntityRecord( 'root', 'site', '' );
+    }, [] );
+
+    if ( ! settings ) return <p>読み込み中...</p>;
+
+    return (
+        <div>
+            <p>サイトタイトル: { settings.title }</p>
+            <p>カスタムオプション: { settings.my_custom_option_name }</p>
+        </div>
+    );
+};
+コードは注意してご使用ください。
+
+重要なポイント
+getSite() セレクター: wp_options の主要な項目（title, description, url, timezone など）をまとめて取得できる便利なショートカットです。
+更新も可能: useSelect で取得するだけでなく、dispatch('core').saveSite( { my_custom_option_name: 'new value' } ) を使えば、React 側から直接 wp_options の値を更新できます。
+権限: wp_options のデータ取得・更新には、通常 manage_options 権限が必要です。
+特定のプラグインが保存している独自のオプション値にアクセスしたいとお考えですか？
+
+######################################################
+
+useSelect('core') を使用して`wp_postmeta`テーブルの値を取得する方法
+wp_postmeta の値を useSelect('core') で取得するには、タームメタやオプションと同様、PHP 側での REST API 公開設定が必要です。
+デフォルトでは、投稿オブジェクトの中に meta フィールドは表示されません。
+1. PHP側：メタデータを REST API に登録する
+register_post_meta を使用して、特定の meta_key を API で読み取れるようにします。
+php
+add_action( 'init', function() {
+    register_post_meta( 'post', 'my_custom_meta_key', array(
+        'show_in_rest' => true, // これを true にしないと useSelect で取れません
+        'single'       => true,
+        'type'         => 'string',
+    ) );
+} );
+コードは注意してご使用ください。
+
+※ post の部分を page やカスタム投稿タイプ名に変えることで、他の投稿タイプにも適用できます。
+2. JS側：useSelect で取得する
+投稿データの一部として meta プロパティ内に格納されます。
+特定の投稿のメタを取得する場合
+javascript
+import { useSelect } from '@wordpress/data';
+
+const PostMetaDisplay = ( { postId } ) => {
+    const post = useSelect( ( select ) => {
+        return select( 'core' ).getEntityRecord( 'postType', 'post', postId );
+    }, [ postId ] );
+
+    // meta プロパティから特定のキーにアクセス
+    const metaValue = post?.meta?.[ 'my_custom_meta_key' ];
+
+    return (
+        <div>
+            <p>投稿タイトル: { post?.title?.rendered }</p>
+            <p>カスタムメタ: { metaValue || '値がありません' }</p>
+        </div>
+    );
+};
+コードは注意してご使用ください。
+
+編集中の投稿（ブロックエディター内）のメタを取得する場合
+現在開いている投稿のメタをリアルタイムで取得したい場合は、getEditedPostAttribute を使うのが一般的です。
+javascript
+const metaValue = useSelect( ( select ) => {
+    return select( 'core/editor' ).getEditedPostAttribute( 'meta' )?.[ 'my_custom_meta_key' ];
+}, [] );
+コードは注意してご使用ください。
+
+重要なヒント
+ACF を使用している場合: フィールド設定の「REST API で表示」を ON にするだけで、post.meta ではなく post.acf というプロパティ経由で取得できるようになります。
+一括取得: getEntityRecords で取得した複数の投稿に対しても、同様にそれぞれのオブジェクトの中に meta フィールドが含まれます。
+取得したメタデータを使って、ブロックエディターのサイドパネルにカスタム入力欄などを作成される予定ですか？
+
+#############################################
+
+useSelect('core') を使用して`wp_posts`テーブルの値を取得する方法
+wp_posts テーブルのデータは、WordPress REST API の中核（Core）であるため、useSelect('core') を使って最も簡単に取得できるエンティティです。
+基本的な取得方法
+getEntityRecords を使用します。第1引数に 'postType'、第2引数に投稿タイプ（post, page, またはカスタム投稿タイプ名）を指定します。
+javascript
+import { useSelect } from '@wordpress/data';
+
+const PostList = () => {
+    const { posts, hasResolved } = useSelect( ( select ) => {
+        // 取得条件（例：最新5件、公開済み）
+        const query = { per_page: 5, status: 'publish' };
+        
+        return {
+            posts: select( 'core' ).getEntityRecords( 'postType', 'post', query ),
+            hasResolved: select( 'core' ).hasFinishedResolution( 'getEntityRecords', [ 'postType', 'post', query ] ),
+        };
+    }, [] );
+
+    if ( ! hasResolved ) return <p>読み込み中...</p>;
+
+    return (
+        <ul>
+            { posts?.map( post => (
+                <li key={ post.id }>{ post.title.rendered }</li>
+            ) ) }
+        </ul>
+    );
+};
+コードは注意してご使用ください。
+
+よく使うセレクターの使い分け
+用途に応じて、core データストア内の異なるセレクターを使い分けます。
+セレクター	用途
+getEntityRecords	条件に合う複数の投稿を一覧で取得する時に使用
+getEntityRecord	ID を指定して特定の1件を取得する時に使用
+getEditedPostAttribute	ブロックエディターで編集中の投稿（未保存の値を含む）を取得する時に使用 ※core/editor ストア推奨
+条件による絞り込み（クエリパラメーター）
+第3引数のオブジェクトで、SQLの WHERE や ORDER BY に相当する指定が可能です。
+特定のカテゴリーで絞り込む: { categories: [ ID ] }
+特定の著者で絞り込む: { author: ユーザーID }
+検索ワードを指定する: { search: 'キーワード' }
+固定ページを取得する: 第2引数を 'page' に変更
+注意点：カスタム投稿タイプの場合
+自作したカスタム投稿タイプを取得したい場合は、PHP 側の register_post_type の引数で 'show_in_rest' => true を設定していることを確認してください。これがないと useSelect でデータを引っ張ることができません。
+特定のカスタム投稿タイプや、特定のカスタムフィールド（メタデータ）による絞り込みが必要ですか？
+
+
+#############################################
+
+useSelect('core') を使用して`wp_termmeta`テーブルの値を取得する方法
+wp_termmeta の値を useSelect('core') で取得するには、そのメタデータが REST API に公開されていることが必須です。
+1. PHP側：メタデータを REST API に登録
+デフォルトではセキュリティ上、メタデータは API に含まれません。register_term_meta を使って特定の meta_key を公開します。
+php
+add_action( 'init', function() {
+    register_term_meta( 'category', 'my_custom_meta_key', array(
+        'show_in_rest' => true, // これを true にするのが必須
+        'single'       => true,
+        'type'         => 'string',
+    ) );
+} );
+コードは注意してご使用ください。
+
+2. JS側：useSelect で取得
+タームオブジェクト（カテゴリーやタグ）を取得すると、その中の meta プロパティに値が格納されています。
+javascript
+import { useSelect } from '@wordpress/data';
+
+const CategoryMeta = ( { categoryId } ) => {
+    const category = useSelect( ( select ) => {
+        // getEntityRecord で特定のカテゴリー 1 件を取得
+        return select( 'core' ).getEntityRecord( 'taxonomy', 'category', categoryId );
+    }, [ categoryId ] );
+
+    // メタデータの抽出
+    const metaValue = category?.meta?.[ 'my_custom_meta_key' ];
+
+    if ( ! category ) return 'Loading...';
+
+    return (
+        <div>
+            <p>カテゴリ: { category.name }</p>
+            <p>メタ値: { metaValue || '未設定' }</p>
+        </div>
+    );
+};
+コードは注意してご使用ください。
+
+重要なポイント
+一括取得の場合: getEntityRecords (複数形) でカテゴリー一覧を取得した場合も、各カテゴリーオブジェクト内に meta フィールドが自動で含まれます。
+権限: データの取得には、そのタクソノミーを閲覧できる権限が必要です。
+ACF: Advanced Custom Fields を使用しているなら、管理画面で「Show in REST API」を有効にするだけで、acf プロパティ経由でアクセスできます。
+特定のプラグインが作成したメタデータや、独自のカスタムタクソノミーのメタ情報を取得しようとしていますか？
+
+#################################################
+
+useSelect('core') を使用して`wp_terms`テーブルの値を取得する方法
+wp_terms テーブル（カテゴリーやタグ）は WordPress の標準エンティティであるため、useSelect('core') を使ってそのまま取得可能です。
+基本的な実装方法
+getEntityRecords を使用し、第2引数にタクソノミーのスラッグ（category や post_tag）を指定します。
+javascript
+import { useSelect } from '@wordpress/data';
+
+const TermList = () => {
+    const { terms, isResolved } = useSelect( ( select ) => {
+        // 全件取得するためのクエリ（デフォルトは10件）
+        const query = { per_page: -1, hide_empty: false };
+        
+        return {
+            terms: select( 'core' ).getEntityRecords( 'taxonomy', 'category', query ),
+            isResolved: select( 'core' ).hasFinishedResolution( 'getEntityRecords', [ 'taxonomy', 'category', query ] ),
+        };
+    }, [] );
+
+    if ( ! isResolved ) return <p>読み込み中...</p>;
+
+    return (
+        <ul>
+            { terms?.map( term => (
+                <li key={ term.id }>{ term.name } (投稿数: { term.count })</li>
+            ) ) }
+        </ul>
+    );
+};
+コードは注意してご使用ください。
+
+取得のバリエーション
+タグを取得: 'category' を 'post_tag' に変更。
+特定の親を持つターム: クエリに { parent: 0 } を追加（親階層のみ取得）。
+名前で検索: クエリに { search: 'キーワード' } を追加。
+注意点
+カスタムタクソノミー: 独自に作成したタクソノミーの場合、PHP側の register_taxonomy で 'show_in_rest' => true を設定していないと、useSelect では取得できません。
+メタデータの取得: wp_termmeta の値も必要な場合は、先に回答した通り register_term_meta による REST 公開設定が必要です。
+特定のカスタムタクソノミーが表示されない、といった問題は起きていませんか？
+
+##################################################
+
+useSelect('core') を使用して `wp_term_relationships` テーブルの値を取得する方法
+
+結論から申し上げますと、wp_term_relationships テーブルを useSelect('core') で直接取得するエンティティは存在しません。
+このテーブルは「投稿（wp_posts）」と「ターム（wp_terms）」を紐付けるための中間テーブルであるため、WordPress REST API では投稿データの一部、またはタームデータの絞り込み条件として処理されます。
+用途に合わせて以下のいずれかの方法をとります。
+1. 特定の投稿に紐づくタームを取得する
+特定の投稿（wp_posts）がどのカテゴリーやタグを持っているかを知りたい場合は、その投稿オブジェクトのプロパティを確認します。
+javascript
+const post = useSelect( ( select ) => {
+    return select( 'core' ).getEntityRecord( 'postType', 'post', postId );
+}, [ postId ] );
+
+// 投稿に紐づくカテゴリーIDの配列が返ってきます（wp_term_relationships の結果に相当）
+const categoryIds = post?.categories; 
+コードは注意してご使用ください。
+
+2. 特定のタームを持つ投稿を一覧取得する
+逆に、特定のカテゴリー（wp_terms）に属する投稿一覧を取得したい場合は、getEntityRecords のクエリパラメーターを使用します。
+javascript
+const posts = useSelect( ( select ) => {
+    // categories パラメーターでタームIDを指定
+    return select( 'core' ).getEntityRecords( 'postType', 'post', { categories: [ 123 ] } );
+}, [] );
+コードは注意してご使用ください。
+
+3. どうしても「中間テーブルそのもの」のデータが必要な場合
+標準の REST API には「リレーションシップ」というエンドポイントがないため、カスタム REST API エンドポイントを自作し、core データストアに addEntities で登録する必要があります。
+PHP側（エンドポイント自作）:
+php
+register_rest_route( 'my-plugin/v1', '/term-relationships', [
+    'methods' => 'GET',
+    'callback' => function() {
+        global $wpdb;
+        return $wpdb->get_results( "SELECT * FROM {$wpdb->prefix}term_relationships LIMIT 100" );
+    },
+    'permission_callback' => '__return_true',
+] );
+コードは注意してご使用ください。
+
+まとめ
+投稿のタームを知りたい: post.categories や post.tags を見る。
+タームに属する投稿を知りたい: getEntityRecords のクエリで categories: [ID] を使う。
+現在、「どの投稿にどのタグが付いているか」という一覧をカスタムの表などで表示しようとされていますか？
+
+#######################################################
+
+useSelect('core') を使用して`wp_term_taxonomy`  テーブルの値を取得する方法
+
+結論から申し上げますと、wp_term_taxonomy テーブルを useSelect('core') で直接取得する専用のエンティティは存在しません。
+WordPress REST API では、wp_terms と wp_term_taxonomy のデータは統合され、taxonomy エンティティ（カテゴリーやタグなど） として扱われます。
+1. 標準的な取得方法（カテゴリーやタグとして取得）
+通常、wp_term_taxonomy に格納されている「どのタクソノミーに属しているか」「親要素は何か」「投稿数（count）」といった情報は、以下の getEntityRecords でまとめて取得できます。
+javascript
+import { useSelect } from '@wordpress/data';
+
+const TaxonomyData = () => {
+    const terms = useSelect( ( select ) => {
+        // 'category' や 'post_tag' を指定することで、内部的に wp_term_taxonomy と結合されたデータが返ります
+        return select( 'core' ).getEntityRecords( 'taxonomy', 'category', { per_page: -1 } );
+    }, [] );
+
+    return (
+        <ul>
+            { terms?.map( term => (
+                <li key={ term.id }>
+                    { term.name } (タクソノミー: { term.taxonomy }, 親ID: { term.parent }, 投稿数: { term.count })
+                </li>
+            ) ) }
+        </ul>
+    );
+};
+コードは注意してご使用ください。
+
+2. 「タクソノミーの設定自体」を取得する場合
+「そのタクソノミーがどんなラベルか」「REST API で公開されているか」といった wp_term_taxonomy の定義に近い情報を取得するには、getTaxonomy を使用します。
+javascript
+const taxonomyInfo = useSelect( ( select ) => {
+    return select( 'core' ).getTaxonomy( 'category' );
+}, [] );
+
+// taxonomyInfo.hierarchical (階層ありかどうか) などの設定値が取れます
+コードは注意してご使用ください。
+
+3. どうしてもテーブル生のデータが必要な場合
+標準 API では term_taxonomy_id などの生データを直接叩く口がないため、カスタム REST API エンドポイントを自作し、addEntities で登録する必要があります。
+PHP側: register_rest_route で $wpdb->prefix . 'term_taxonomy' をクエリするエンドポイントを作成。
+JS側: dispatch('core').addEntities([{ name: 'term-taxonomies', kind: 'root', baseURL: '/v1/term-taxonomies' }]) で登録。
+まとめ
+タームの親子関係や投稿数を知りたい: getEntityRecords( 'taxonomy', 'slug' ) で十分です。
+タクソノミーの定義を知りたい: getTaxonomy( 'slug' ) を使います。
+現在、「特定のタクソノミーに属するタームの総数」 や 「階層構造の深い解析」 など、特殊な集計を行おうとされていますか？
+
+#####################################################
+
+useSelect('core') を使用して`wp_usermeta`  テーブルの値を取得する方法
+
+wp_usermeta テーブルの値を useSelect('core') で取得するには、他のメタデータと同様に PHP 側で REST API への公開設定が必要です。
+デフォルトのユーザーオブジェクトには、セキュリティ保護のため特定のメタデータしか含まれていません。
+1. PHP 側：メタデータを REST API に登録
+取得したい meta_key を register_meta（または register_user_meta）で公開します。
+php
+add_action( 'init', function() {
+    register_meta( 'user', 'my_custom_user_meta', array(
+        'show_in_rest' => true, // これが必須
+        'single'       => true,
+        'type'         => 'string',
+    ) );
+} );
+コードは注意してご使用ください。
+
+2. JS 側：useSelect で取得
+ユーザー情報の中にある meta プロパティからアクセスします。
+現在ログイン中のユーザーのメタを取得する場合
+javascript
+import { useSelect } from '@wordpress/data';
+
+const UserMetaDisplay = () => {
+    const currentUser = useSelect( ( select ) => {
+        return select( 'core' ).getCurrentUser();
+    }, [] );
+
+    // meta プロパティから取得
+    const metaValue = currentUser?.meta?.[ 'my_custom_user_meta' ];
+
+    return (
+        <div>
+            <p>こんにちは、{ currentUser?.name }さん</p>
+            <p>カスタムメタ値: { metaValue || '未設定' }</p>
+        </div>
+    );
+};
+コードは注意してご使用ください。
+
+特定のユーザー ID のメタを取得する場合
+javascript
+const user = useSelect( ( select ) => {
+    return select( 'core' ).getEntityRecord( 'root', 'user', userId );
+}, [ userId ] );
+
+const metaValue = user?.meta?.[ 'my_custom_user_meta' ];
+コードは注意してご使用ください。
+
+重要な注意点
+権限の制限: 他のユーザーのメタデータを取得する場合、基本的には「ユーザー編集権限（edit_users）」が必要です。自分自身のメタデータであれば、通常は取得可能です。
+一括取得: getEntityRecords( 'root', 'user' ) を使ってユーザー一覧を取得した場合も、各ユーザーオブジェクト内に meta フィールドが含まれます。
+ACF 使用時: Advanced Custom Fields の「ユーザーフォーム」でフィールドを作成し、「REST API で表示」を有効にすれば、acf プロパティ経由で簡単に取得できます。
+特定のプロフィール項目（住所や電話番号など）や、プラグインが追加したユーザー設定を取得しようとしていますか？
+
+#############################################
+
+useSelect('core') を使用して`wp_users`  テーブルの値を取得する方法
+wp_users テーブルのデータは、WordPress 標準の user エンティティとして core データストアに登録されています。そのため、useSelect('core') を使って直接取得可能です。
+取得したい対象（自分自身か、全ユーザーか、特定の1人か）によってセレクターを使い分けます。
+1. ログイン中のユーザー情報を取得する 
+自分の ID や名前、権限などを取得する場合に最もよく使われる方法です。
+javascript
+import { useSelect } from '@wordpress/data';
+
+const CurrentUser = () => {
+    const user = useSelect( ( select ) => {
+        return select( 'core' ).getCurrentUser();
+    }, [] );
+
+    if ( ! user ) return <p>読み込み中...</p>;
+
+    return <p>こんにちは、{ user.name } さん（ID: { user.id }）</p>;
+};
+コードは注意してご使用ください。
+
+2. ユーザー一覧を取得する
+getEntityRecords を使用します。第1引数に 'root'、第2引数に 'user' を指定します。
+javascript
+const users = useSelect( ( select ) => {
+    // クエリパラメーター（例：管理者権限を持つユーザーのみ）
+    return select( 'core' ).getEntityRecords( 'root', 'user', { roles: [ 'administrator' ] } );
+}, [] );
+コードは注意してご使用ください。
+
+3. 特定の ID のユーザーを取得する
+getEntityRecord を使用して、特定の 1 名をピンポイントで取得します。
+javascript
+const user = useSelect( ( select ) => {
+    return select( 'core' ).getEntityRecord( 'root', 'user', userId );
+}, [ userId ] );
+コードは注意してご使用ください。
+
+重要なポイント
+取得できる項目: デフォルトでは id, name, url, description, link, slug, avatar_urls などが返されます。
+メールアドレスや権限: email や roles などの機密性の高い情報は、自分自身のデータであるか、またはユーザー編集権限（edit_users）を持つユーザーがリクエストした場合のみ取得できます。
+メタデータの取得: wp_usermeta の値（住所やカスタム項目など）が必要な場合は、register_meta で show_in_rest => true の設定が別途必要です。
+投稿の作成者一覧をドロップダウンで表示したり、ユーザープロフィール編集画面を作成したりする予定ですか？#
+
+###############################################
+
+useSelect('core') を使用して `wp_wc_admin_notes`テーブルの値を取得する方法
+wp_wc_admin_notes は WooCommerce Admin（マーケティング通知や通知メッセージ）のカスタムテーブルであるため、WordPress の core データストアにはデフォルトで登録されていません。
+しかし、WooCommerce はこのテーブル用の REST API エンドポイントを標準で提供しているため、core データストアに「エンティティ」として定義を追加することで、useSelect('core') を使った取得が可能になります。
+実装手順
+1. core データストアにエンティティを登録する
+JavaScript 側で、WooCommerce のノート用エンドポイントを core の仲間として認識させます。
+javascript
+import { useSelect, dispatch } from '@wordpress/data';
+
+// 1. core データストアにエンティティ定義を追加 (一度だけ実行)
+dispatch('core').addEntities([
+    {
+        name: 'admin-notes',     // 任意の名前
+        kind: 'wc/v3',          // 任意のグループ
+        baseURL: '/wc/v3/admin/notes', // WooCommerce 標準のAPIパス
+    }
+]);
+コードは注意してご使用ください。
+
+2. useSelect で取得する
+登録した名前（admin-notes）とグループ（wc/v3）を指定して呼び出します。
+javascript
+const AdminNotesList = () => {
+    const { notes, hasResolved } = useSelect( ( select ) => {
+        const args = [ 'wc/v3', 'admin-notes' ];
+        return {
+            notes: select( 'core' ).getEntityRecords( ...args ),
+            hasResolved: select( 'core' ).hasFinishedResolution( 'getEntityRecords', args ),
+        };
+    }, [] );
+
+    if ( ! hasResolved ) return <p>読み込み中...</p>;
+
+    return (
+        <ul>
+            { notes?.map( note => (
+                <li key={ note.id }>
+                    <strong>{ note.title }</strong>: { note.content }
+                </li>
+            ) ) }
+        </ul>
+    );
+};
+コードは注意してご使用ください。
+
+注意点
+API の存在確認: このエンドポイントは WooCommerce REST API Documentation に基づいています。WooCommerce が有効である必要があります。
+認証と権限: 通常、管理通知の取得には manage_woocommerce 権限が必要です。REST API 経由で取得する場合、適切にログインしている必要があります。
+テーブル内容: wp_wc_admin_notes テーブルには、通知のタイトル、内容、ステータス（既読/未読）などが保存されています。
+この通知データを使って、独自のカスタムダッシュボード通知を表示したり、特定の通知を一括既読にしたりする機能を開発中ですか？
+
+######################################################
+
+thanks
+どういたしまして！
+WordPressのカスタムテーブルから標準テーブル、さらにはWooCommerceなどのプラグイン固有のテーブルまで、useSelect('core') を使ったデータ取得の流れを網羅的に解説しました。
+共通して言える重要なポイントを整理します：
+標準テーブル（Posts, Comments, Usersなど）: 設定なしで getEntityRecords で取得可能。
+メタデータ（Postmeta, Usermetaなど）: PHP側で register_meta を使い show_in_rest => true に設定。
+カスタムテーブル: REST APIを自作した上で、JS側で addEntities を使って core データストアに登録する。
+今後、取得したデータを dispatch を使って更新（保存）する方法や、パフォーマンス向上のためのキャッシュ管理などについて詳しく知りたくなった時は、いつでも聞いてくださいね。
+次は、特定の機能を実装するための具体的なコードが必要ですか？それとも別のテーブルについて調べますか？
+
+##################################################
+
+
+

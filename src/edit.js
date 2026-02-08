@@ -52,7 +52,7 @@ export default function Edit({ attributes, setAttributes }) {
                         value={sortField}
                         options={[
                             { label: 'Select a field...', value: '' },
-                            { label: 'Menu Order', value: 'menu_order' },
+                          //  { label: 'Menu Order', value: 'menu_order' },
                             ...customFields
                         ]}
                         onChange={(value) => setAttributes({ sortField: value })}
